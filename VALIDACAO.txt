@@ -1,0 +1,6 @@
+Verificação local:
+- Sintaxe JavaScript: node --check src/main.js
+- Estrutura de projeto e pacote de publicação: arquivos presentes
+- npm install / Vite build: NÃO EXECUTADOS COM SUCESSO (ambiente sem instalação npm concluída)
+- Supabase SQL / RLS: não executado (projeto Supabase ainda não fornecido)
+- Login / testes multiusuário: pendentes de credenciais de teste
