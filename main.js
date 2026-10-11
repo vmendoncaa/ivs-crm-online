@@ -7,7 +7,8 @@ const key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 const validConfig=Boolean(url&&key&&!url.includes('SEU-PROJETO'));
 const db=validConfig?createClient(url,key):null;
 let user=null,me=null,people=[],leads=[],activities=[],appointments=[],sales=[];
-let currentTab='overview', search='',ownerFilter='',statusFilter='',priorityFilter='',focusFilter='all', taskOwner='';
+let guidedLeadId=null, guidedOwner='';
+let currentTab='routine', search='',ownerFilter='',statusFilter='',priorityFilter='',focusFilter='all', taskOwner='';
 const statusValues=['Novo lead','Contato pendente','Em negociação','Agendado','Compareceu','Orçamento aberto','Venda concluída','Perdido / encerrado'];
 const priorValues=['Alta','Média','Baixa'];
 const appointmentValues=['Pendente','Confirmado','Compareceu','Faltou','Cancelado','Reagendado'];
@@ -57,11 +58,73 @@ function layout(){
 const active=activeLeads();const total=getMonthSales().reduce((a,s)=>a+Number(s.amount),0);const monthApp=getMonthAppointments();const completed=monthApp.filter(a=>a.status==='Compareceu').length, missed=monthApp.filter(a=>a.status==='Faltou').length;
 const showSales=isManager();
 const attendanceFoot=`${completed} compareceu · ${missed} faltou · ${monthApp.length} agendamento(s) no mês`;
-root.innerHTML=`<header><div class="wrap"><div class="top"><div class="brand"><div class="logo">IVS</div><div><strong>Central Comercial</strong><div class="sub">Instituto Visão Solidária · Piracicaba</div></div></div><div class="right"><span class="live">● Online · Supabase</span><span class="badge">${esc(me.name)} · ${esc(me.role)}</span><button class="outline" id="logout">Sair</button></div></div><nav>${[['overview','Visão geral'],['leads','Oportunidades'],['tasks','Fila de ações'],['appointments','Agendamentos'],['sales','Vendas'],['team','Equipe']].filter(x=>x[0]!=='team'||isManager()).map(([id,t])=>`<button data-tab="${id}" class="${currentTab===id?'active':''}">${t}</button>`).join('')}</nav></div></header><main class="wrap"><div class="headline"><div><h1>${({overview:'Visão geral',leads:'Carteira de oportunidades',tasks:'Fila de ligações e recontatos',appointments:'Agenda da loja',sales:'Vendas e faturamento',team:'Gestão da equipe'})[currentTab]}</h1><p>Dados compartilhados e protegidos por permissões.</p></div><div class="actions"><button class="outline" id="refresh">↻ Atualizar</button><button class="button" id="newLead">＋ Novo lead</button></div></div><div id="errorBanner" class="errorBanner isHidden"></div><div class="stats">${stat(showSales?'Faturamento do mês':'Minhas vendas no mês',money(total),'Meta da loja: R$ 120.000')}${stat('Oportunidades ativas',active.length,'Carteira visível')}${stat('Leads atrasados',active.filter(overdue).length,'Prioridade de hoje',true)}${stat('Sem próxima data',active.filter(noDate).length,'Precisam de ação',true)}${stat('Sem contato há 3+ dias',active.filter(idle).length,'Prioridade de recuperação',true)}${stat('Comparecimento',missed+completed?`${Math.round(100*completed/(missed+completed))}%`:'—',attendanceFoot)}</div><div id="content"></div></main><dialog id="modal"><form id="modalForm"><div id="modalContent"></div><div class="dialogFooter"><button type="button" class="outline" id="cancelModal">Cancelar</button><button type="submit" class="button" id="submitModal">Salvar</button></div></form></dialog>`;
+root.innerHTML=`<header><div class="wrap"><div class="top"><div class="brand"><div class="logo">IVS</div><div><strong>Central Comercial</strong><div class="sub">Instituto Visão Solidária · Piracicaba</div></div></div><div class="right"><span class="live">● Online · Supabase</span><span class="badge">${esc(me.name)} · ${esc(me.role)}</span><button class="outline" id="logout">Sair</button></div></div><nav>${[['routine','Minha Rotina'],['overview','Visão geral'],['leads','Oportunidades'],['tasks','Fila de ações'],['appointments','Agendamentos'],['sales','Vendas'],['team','Equipe']].filter(x=>x[0]!=='team'||isManager()).map(([id,t])=>`<button data-tab="${id}" class="${currentTab===id?'active':''}">${t}</button>`).join('')}</nav></div></header><main class="wrap"><div class="headline"><div><h1>${({routine:'Minha rotina comercial',overview:'Visão geral',leads:'Carteira de oportunidades',tasks:'Fila de ligações e recontatos',appointments:'Agenda da loja',sales:'Vendas e faturamento',team:'Gestão da equipe'})[currentTab]}</h1><p>Dados compartilhados e protegidos por permissões.</p></div><div class="actions"><button class="outline" id="refresh">↻ Atualizar</button><button class="button" id="newLead">＋ Novo lead</button></div></div><div id="errorBanner" class="errorBanner isHidden"></div><div class="stats">${stat(showSales?'Faturamento do mês':'Minhas vendas no mês',money(total),'Meta da loja: R$ 120.000')}${stat('Oportunidades ativas',active.length,'Carteira visível')}${stat('Leads atrasados',active.filter(overdue).length,'Prioridade de hoje',true)}${stat('Sem próxima data',active.filter(noDate).length,'Precisam de ação',true)}${stat('Sem contato há 3+ dias',active.filter(idle).length,'Prioridade de recuperação',true)}${stat('Comparecimento',missed+completed?`${Math.round(100*completed/(missed+completed))}%`:'—',attendanceFoot)}</div><div id="content"></div></main><dialog id="modal"><form id="modalForm"><div id="modalContent"></div><div class="dialogFooter"><button type="button" class="outline" id="cancelModal">Cancelar</button><button type="submit" class="button" id="submitModal">Salvar</button></div></form></dialog>`;
 document.querySelector('#logout').onclick=()=>db.auth.signOut();document.querySelector('#refresh').onclick=refresh;document.querySelector('#newLead').onclick=()=>openLead();document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{currentTab=x.dataset.tab;layout()});
 showTab();
 }
-function showTab(){if(['overview','leads','tasks'].includes(currentTab))showLeads();else if(currentTab==='appointments')showAppointments();else if(currentTab==='sales')showSales();else showTeam()}
+// IVS Sales OS 0.6 — rotina guiada. Usa somente dados autorizados pelo Supabase/RLS.
+const addDays=(n)=>{const [y,m,d]=day().split('-').map(Number);return new Date(Date.UTC(y,m-1,d+n)).toISOString().slice(0,10)};
+const latestContact=(id)=>activities.filter(a=>a.lead_id===id).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0];
+const touchedToday=(id)=>activities.some(a=>a.lead_id===id&&localDate(a.created_at)===day());
+function recommendation(l){
+ const a=latestAppointment(l.id);
+ if(a&&['Pendente','Confirmado'].includes(a.status)&&localDate(a.scheduled_at)>=day()&&localDate(a.scheduled_at)<=addDays(1)){
+   return {type:'Confirmar visita',rank:1,reason:`Agendado para ${fullTime(a.scheduled_at)}`,script:`Olá, ${l.name}! Aqui é [vendedor], do IVS Piracicaba. Estou confirmando sua visita em ${fullTime(a.scheduled_at)}. Podemos contar com você?`,kind:'Confirmação'};
+ }
+ if(a&&a.status==='Faltou'&&!touchedToday(l.id))return {type:'Recuperar falta',rank:2,reason:'Cliente não compareceu',script:`Olá, ${l.name}! Tudo bem? Vi que não conseguimos nos encontrar no horário combinado. Quer que eu verifique um novo horário para você?`,kind:'Recontato'};
+ if(l.status==='Orçamento aberto')return {type:'Recuperar orçamento',rank:3,reason:`Orçamento em aberto · ${money(l.expected_value)}`,script:`Oi, ${l.name}! Aqui é [vendedor], do IVS. Ficou alguma dúvida sobre as lentes, armação ou condições de pagamento do seu orçamento?`,kind:'Recuperação de orçamento'};
+ if(l.priority==='Alta')return {type:'Ligar para lead quente',rank:4,reason:'Oportunidade de alta prioridade',script:`Olá, ${l.name}, tudo bem? Sou [vendedor], do IVS Piracicaba. Vi que você conversou conosco sobre ${l.need||'seus óculos'}. Posso te ajudar a agendar uma visita?`,kind:'Primeiro contato'};
+ return {type:'Recontato de oportunidade',rank:5,reason:l.due_date?`Próxima ação prevista: ${fmtDate(l.due_date)}`:'Sem próxima data definida',script:`Olá, ${l.name}! Aqui é [vendedor], do IVS Piracicaba. Você ainda precisa de ajuda para encontrar seus óculos?`,kind:'Recontato'};
+}
+function routineQueue(){
+ const owner=isManager()?guidedOwner:user.id;
+ return activeLeads().filter(l=>(!owner||l.owner_id===owner)&&l.consent!=='Não'&&!touchedToday(l.id)&&(actionable(l)||idle(l)||recommendation(l).rank<=2))
+ .map(l=>({lead:l,rec:recommendation(l)}))
+ .sort((a,b)=>a.rec.rank-b.rec.rank || Number(overdue(b.lead))-Number(overdue(a.lead)) || ({Alta:0,Média:1,Baixa:2}[a.lead.priority]-({Alta:0,Média:1,Baixa:2}[b.lead.priority])) || String(a.lead.due_date||'').localeCompare(String(b.lead.due_date||'')));
+}
+function showRoutine(){
+ const con=document.querySelector('#content');const q=routineQueue();
+ if(guidedLeadId&&!q.some(o=>o.lead.id===guidedLeadId))guidedLeadId=null;
+ const selected=q.find(o=>o.lead.id===guidedLeadId)||q[0];
+ const dayActions=todayRecords(activities).filter(a=>!guidedOwner||leads.find(l=>l.id===a.lead_id)?.owner_id===guidedOwner);
+ const calls=dayActions.filter(a=>a.channel==='Ligação').length;
+ const team=isManager()?`<div class="routineOwners"><label>Carteira acompanhada</label><select id="routineOwner"><option value="">Equipe inteira</option>${people.filter(p=>p.active&&p.role==='vendedor').map(p=>`<option value="${esc(p.id)}" ${guidedOwner===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></div>`:'';
+ const html=selected?`<div class="guidedCard"><div class="guidedTop"><div><span class="eyebrow">PRÓXIMA AÇÃO RECOMENDADA</span><h2>${esc(selected.rec.type)}</h2><p>${esc(selected.rec.reason)}</p></div>${badge(selected.lead.priority)}</div><div class="guidedClient"><div><div class="eyebrow">CLIENTE</div><h3>${esc(selected.lead.name)}</h3><p>${esc(selected.lead.need||'Necessidade não registrada')}</p><small>${esc(profileName(selected.lead.owner_id))} · ${esc(selected.lead.phone||'Sem telefone')}</small></div><div class="guidedContact">${selected.lead.phone?`<a class="outline" href="tel:${esc(selected.lead.phone.replace(/[^+\d]/g,''))}">Ligar</a>`:'<span class="muted">Sem telefone</span>'}</div></div><div class="scriptCard"><div class="eyebrow">ROTEIRO SUGERIDO — PERSONALIZE ANTES DE FALAR</div><p>${esc(selected.rec.script)}</p><button class="outline" id="copyScript">Copiar roteiro</button></div><div class="guidedActions"><button class="button" id="finishAction">Registrar resultado e próxima ação →</button><button class="outline" id="editGuided">Ver oportunidade</button><button class="outline" id="skipAction">Próximo da fila</button></div><p class="footnote">O sistema não realiza chamadas nem envia mensagens automaticamente. O vendedor deve respeitar as preferências do cliente e registrar o resultado real.</p></div>`:'<div class="guidedEmpty"><h2>Fila atual concluída!</h2><p>Nenhuma ação pendente para a carteira selecionada. Verifique novas oportunidades e agendamentos mais tarde.</p></div>';
+ con.innerHTML=`<div class="routineHero"><div><span class="eyebrow">CENTRAL DE EXECUÇÃO · ${esc(day().split('-').reverse().join('/'))}</span><h2>Seu próximo atendimento, sem adivinhação.</h2><p>Execute uma ação por vez, registre o resultado e avance para o próximo cliente.</p></div>${team}</div><div class="routineMetrics"><div><b>${q.length}</b><span>Na fila</span></div><div><b>${calls}</b><span>Ligações hoje</span></div><div><b>${dayActions.filter(a=>a.channel==='WhatsApp').length}</b><span>WhatsApps hoje</span></div><div><b>${activeLeads().filter(overdue).length}</b><span>Atrasados visíveis</span></div></div><div class="guidedLayout">${html}<aside class="routineAside"><h3>Próximos clientes</h3><p>${q.length} oportunidade(s) aguardando ação</p>${q.slice(0,12).map(({lead,rec},i)=>`<button class="nextItem ${lead.id===selected?.lead.id?'selected':''}" data-guided="${lead.id}"><span class="itemNum">${i+1}</span><span><b>${esc(lead.name)}</b><small>${esc(rec.type)} · ${esc(profileName(lead.owner_id))}</small></span></button>`).join('')||'<p class="muted">Tudo em dia!</p>'}</aside></div>`;
+ con.querySelector('#routineOwner')?.addEventListener('change',e=>{guidedOwner=e.target.value;guidedLeadId=null;showRoutine()});
+ con.querySelectorAll('[data-guided]').forEach(b=>b.onclick=()=>{guidedLeadId=b.dataset.guided;showRoutine()});
+ con.querySelector('#copyScript')?.addEventListener('click',()=>{navigator.clipboard?.writeText(selected.rec.script).then(()=>notify('Roteiro copiado')).catch(()=>notify('Selecione e copie o roteiro manualmente'))});
+ con.querySelector('#finishAction')?.addEventListener('click',()=>guidedResult(selected.lead,selected.rec));
+ con.querySelector('#editGuided')?.addEventListener('click',()=>openLead(selected.lead));
+ con.querySelector('#skipAction')?.addEventListener('click',()=>{const next=q.findIndex(o=>o.lead.id===selected.lead.id);guidedLeadId=q[(next+1)%q.length]?.lead.id;showRoutine()});
+}
+function guidedResult(l,rec){
+ if(l.consent==='Não')return errorMessage('O cliente não permite contato.');
+ const body=selectField('channel','Canal',['Ligação','WhatsApp','Presencial','Outro'],'Ligação')+
+ selectField('result','Resultado real',['Não atendeu','Interessado / retornar','Visita agendada','Venda concluída','Sem interesse','Outra situação'],'Não atendeu')+
+ field('due','Data da próxima ação',addDays(1),'date')+
+ field('action','Próxima ação','Retornar contato')+
+ textField('details','Observações do atendimento','');
+ modal('Resultado do atendimento · '+l.name,body,async f=>{
+  const result=f.get('result'),end=['Venda concluída','Sem interesse'].includes(result);const due=f.get('due');
+  if(!end&&!due)throw Error('Defina uma data para a próxima ação.');
+  if(result==='Visita agendada'){
+   const pending=appointments.some(a=>a.lead_id===l.id&&['Pendente','Confirmado'].includes(a.status));
+   if(!pending)throw Error('Antes de marcar como visita agendada, cadastre o agendamento na oportunidade.');
+  }
+  const act={lead_id:l.id,user_id:user.id,channel:f.get('channel'),kind:rec.kind,outcome:result+(f.get('details')?' · '+f.get('details'):''),next_action:end?'':f.get('action'),next_due:end?null:due};
+  const ins=await db.from('activities').insert(act).select('id');if(ins.error)throw ins.error;if(!ins.data?.length)throw Error('Registro de atividade não confirmado.');
+  const change={next_action:end?'':f.get('action'),due_date:end?null:due};
+  if(result==='Sem interesse')change.status='Perdido / encerrado';
+  if(result==='Visita agendada')change.status='Agendado';
+  if(result==='Interessado / retornar'&&['Novo lead','Contato pendente'].includes(l.status))change.status='Em negociação';
+  // Uma venda só pode ser encerrada depois de ser registrada na aba Vendas.
+  if(result==='Venda concluída')change.next_action='Registrar venda e confirmar pagamento';
+  if(result==='Venda concluída'){change.due_date=day();}
+  const update=await db.from('leads').update(change).eq('id',l.id).select('id');if(update.error)throw Error('Atividade registrada, mas não foi possível atualizar o lead: '+update.error.message);if(!update.data?.length)throw Error('Atividade registrada, mas a atualização do lead foi bloqueada por permissão.');
+ },()=>{guidedLeadId=null;currentTab='routine'});
+}
+function showTab(){if(currentTab==='routine')showRoutine();else if(['overview','leads','tasks'].includes(currentTab))showLeads();else if(currentTab==='appointments')showAppointments();else if(currentTab==='sales')showSales();else showTeam()}
 function taskIntro(){const queue=activeLeads().filter(l=>actionable(l)||idle(l));const todayActs=todayRecords(activities);const calls=todayActs.filter(a=>a.channel==='Ligação').length;const whatsapp=todayActs.filter(a=>a.channel==='WhatsApp').length;const byOwner=isManager()?people.filter(p=>p.active&&p.role==='vendedor'):[];return `<div class="taskIntro"><div><b>Fila de execução de hoje</b><p>Primeiro: atrasados → sem prazo → agir hoje → parados há 3 dias. Após cada conversa, registre resultado e próxima ação.</p></div><div class="taskMetrics"><span>${queue.length} oportunidades exigem atenção</span><span>${calls} ligações hoje</span><span>${whatsapp} contatos WhatsApp hoje</span></div>${isManager()?`<div class="taskAllocation">${byOwner.map(p=>`<button class="chip ${ownerFilter===p.id?'on':''}" data-task-owner="${p.id}">${esc(p.name)}: ${queue.filter(l=>l.owner_id===p.id).length} pendentes</button>`).join('')}</div>`:''}</div>`}
 function showLeads(){
 const con=document.querySelector('#content');const data=leads.filter(l=>{if(search&&!(`${l.name} ${l.phone} ${l.need} ${l.notes}`).toLowerCase().includes(search.toLowerCase()))return false;if(ownerFilter&&l.owner_id!==ownerFilter)return false;if(statusFilter&&l.status!==statusFilter)return false;if(priorityFilter&&l.priority!==priorityFilter)return false;if(currentTab==='tasks'&&!actionable(l)&&!idle(l))return false;if(focusFilter==='late'&&!overdue(l))return false;if(focusFilter==='noDate'&&!noDate(l))return false;if(focusFilter==='today'&&l.due_date!==day())return false;if(focusFilter==='idle'&&!idle(l))return false;return true}).sort((a,b)=>Number(overdue(b))-Number(overdue(a))||String(a.due_date||'').localeCompare(String(b.due_date||'')));
