@@ -6,16 +6,20 @@ import { createClient } from '@supabase/supabase-js';
 // com a documentação do provedor (não presumir um formato específico).
 const MAX_BYTES = 256 * 1024;
 
+// A BR Whats assina os BYTES ORIGINAIS do JSON.
+// Não acessar req.body: na Vercel o helper pode converter JSON em objeto
+// e reserializar o conteúdo invalidaria a assinatura HMAC.
 async function rawBody(req) {
-  if (Buffer.isBuffer(req.body)) return req.body;
-  if (typeof req.body === 'string') return Buffer.from(req.body, 'utf8');
-  if (req.body !== undefined) throw Object.assign(new Error('body already parsed'), { status: 400 });
+  const length = Number(req.headers?.['content-length'] || 0);
+  if (Number.isFinite(length) && length > MAX_BYTES)
+    throw Object.assign(new Error('body too large'), { status: 413 });
   let size = 0;
   const parts = [];
   for await (const part of req) {
-    size += part.length;
+    const chunk = Buffer.isBuffer(part) ? part : Buffer.from(part);
+    size += chunk.length;
     if (size > MAX_BYTES) throw Object.assign(new Error('body too large'), { status: 413 });
-    parts.push(part);
+    parts.push(chunk);
   }
   return Buffer.concat(parts);
 }
@@ -36,8 +40,8 @@ function verified(req, raw) {
   const format = process.env.BRWHATS_SIGNATURE_FORMAT;
   const hmac = createHmac('sha256', process.env.BRWHATS_WEBHOOK_SECRET).update(raw);
   const expected = format === 'base64' ? hmac.digest('base64') : hmac.digest('hex');
-  const provided = format === 'sha256-hex'
-    ? (signature.startsWith('sha256=') ? signature.slice(7) : '') : signature;
+  if (format === 'sha256-hex' && !/^sha256=[0-9a-f]{64}$/.test(signature)) return false;
+  const provided = format === 'sha256-hex' ? signature.slice(7) : signature;
   const normExpected = format === 'base64' ? expected : expected.toLowerCase();
   const normProvided = format === 'base64' ? provided : provided.toLowerCase();
   const a = Buffer.from(normExpected, 'utf8');
